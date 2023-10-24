@@ -1,0 +1,7 @@
+*.dat
+*.inf
+*.fil
+*.fft
+*.csv
+*.out
+pulscan-gpu

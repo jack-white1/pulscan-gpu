@@ -147,6 +147,7 @@ float* pulscan_readAndNormalizeFFTFile(const char *filepath, long *data_size) {
     fclose(f);
 
     *data_size = (long) size;
+    printf("Data size: %ld\n", *data_size);
     return data;
 }
 
@@ -154,19 +155,21 @@ float* pulscan_readAndNormalizeFFTFile(const char *filepath, long *data_size) {
 // CUDA kernel to take complex number pair and calculate the squared magnitude 
 // i.e. the number multiplied by its complex conjugate (a + bi)(a - bi) = a^2 + b^2
 
-__global__ void pulscan_complexSquaredMagnitudeInPlace(float *deviceArray, long arrayLength) {
+__global__ void pulscan_complexSquaredMagnitude(float2 *complexArray, float* realArray, long arrayLength) {
     long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 
+    if (globalThreadIndex < arrayLength) {
+
     // Calculate the squared magnitude of the complex number pair
-    float real = deviceArray[globalThreadIndex * 2];
-    float complex = deviceArray[globalThreadIndex * 2 + 1];
+    float real = complexArray[globalThreadIndex].x;
+    float complex = complexArray[globalThreadIndex].y;
     float squaredMagnitude = real * real + complex * complex;
 
     __syncthreads();
 
-    if (globalThreadIndex < arrayLength) {
+    
         // Store the squared magnitude in the device array
-        deviceArray[globalThreadIndex] = squaredMagnitude;
+        realArray[globalThreadIndex] = squaredMagnitude;
     }
 }
 
@@ -250,8 +253,8 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
     // Initialise memory for device array of complex numbers as a 1D array of floats: [real, complex, real, complex, ...]
 
     printf("Allocating deviceComplexArray memory\n");
-    float *deviceComplexArray;
-    cudaMalloc((void **) &deviceComplexArray, inputDataSize * 2 * sizeof(float));
+    float2 *deviceComplexArray;
+    cudaMalloc((void **) &deviceComplexArray, inputDataSize * sizeof(float2));
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Error: %s\n", cudaGetErrorString(err)); 
@@ -259,7 +262,7 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
 
     // Copy host array to device array
     printf("Copying memory\n");
-    cudaMemcpy(deviceComplexArray, hostComplexArray, inputDataSize * 2 *sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(deviceComplexArray, hostComplexArray, inputDataSize * sizeof(float2), cudaMemcpyHostToDevice);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Error: %s\n", cudaGetErrorString(err)); 
@@ -312,9 +315,12 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
         printf("Error: %s\n", cudaGetErrorString(err)); 
     }
 
+    float* deviceRealArray;
+    cudaMalloc((void **) &deviceRealArray, inputDataSize * sizeof(float));
+
     // Call the kernel to calculate the magnitude of the complex numbers
     printf("Starting Magnitude kernel\n");
-    pulscan_complexSquaredMagnitudeInPlace<<<numBlocks, numThreadsPerBlock>>>(deviceComplexArray, inputDataSize);
+    pulscan_complexSquaredMagnitude<<<numBlocks, numThreadsPerBlock>>>(deviceComplexArray, deviceRealArray, inputDataSize);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Error: %s\n", cudaGetErrorString(err)); 
@@ -325,7 +331,7 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
         printf("Error: %s\n", cudaGetErrorString(err)); 
     }
     printf("Starting Boxcar kernel\n");
-    pulscan_recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (5*numThreadsPerBlock + 2*zMax) * sizeof(float)>>>(deviceComplexArray, deviceMax, inputDataSize, zStepSize, zMax);
+    pulscan_recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (5*numThreadsPerBlock + 2*zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Error: %s\n", cudaGetErrorString(err)); 
@@ -449,7 +455,7 @@ int main(int argc, char *argv[]) {
 
     // Get the zstep from the command line arguments
     // If not provided, default to 2
-    int zStepSize = 1;
+    int zStepSize = 2;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-zstep") == 0 && i+1 < argc) {
             zStepSize = atoi(argv[i+1]);
