@@ -174,6 +174,7 @@ __global__ void pulscan_complexSquaredMagnitude(float2 *complexArray, float* rea
 }
 
 __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, int zStepSize, int zMax){
+    // called with (6*numThreadsPerBlock + zMax)*sizeof(float) bytes of shared memory
     extern __shared__ float sharedMemory[];
     
     // search array should have block size elements, each float2 will be used as [float, int] rather than [float,float]
@@ -188,18 +189,49 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
     // lookup array should have block size + zMax elements
     float *lookupArray = &sharedMemory[5*blockDim.x];
 
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;;
+    /*int idx = blockIdx.x * blockDim.x + threadIdx.x;;
 
     long readIndex = threadIdx.x;
 
-    while (readIndex < blockDim.x + zMax){
-        if (blockIdx.x * blockDim.x + readIndex < n) {
-            lookupArray[readIndex] = deviceArray[blockIdx.x * blockDim.x + readIndex];
-        } else {
-            lookupArray[readIndex] = 0;
+    // populate the lookup array
+
+    if (threadIdx.x == 0){
+        for (int i = 0; i < zMax + blockDim.x; i++){
+            if (blockIdx.x * blockDim.x + i < n) {
+                lookupArray[i] = deviceArray[blockIdx.x * blockDim.x + i];
+            } else {
+                lookupArray[i] = 0;
+            }
         }
-        readIndex += blockDim.x;
+    }*/
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    long readIndex = threadIdx.x;
+
+    // populate the lookup array
+    for (int offset = 0; offset < zMax; offset += blockDim.x) {
+        int lookupIndex = readIndex + offset;
+        if (lookupIndex < blockDim.x + zMax){
+            if (blockIdx.x * blockDim.x + lookupIndex < n) {
+                lookupArray[lookupIndex] = deviceArray[blockIdx.x * blockDim.x + lookupIndex];
+            } else {
+                lookupArray[lookupIndex] = 0;
+            }
+        }
     }
+
+__syncthreads(); 
+
+    //while (readIndex < blockDim.x + zMax){
+    //    if (blockIdx.x * blockDim.x + readIndex < n) {
+    //        lookupArray[readIndex] = deviceArray[blockIdx.x * blockDim.x + readIndex];
+    //    } else {
+    //        lookupArray[readIndex] = 0;
+    //    }
+    //    readIndex += blockDim.x;
+    //}
+
+
 
     __syncthreads();
 
@@ -330,8 +362,8 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
     if (err != cudaSuccess) {
         printf("Error: %s\n", cudaGetErrorString(err)); 
     }
-    printf("Starting Boxcar kernel\n");
-    pulscan_recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (5*numThreadsPerBlock + 2*zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
+    printf("Starting Boxcar kernel with %ld bytes of shared memory\n", (6*numThreadsPerBlock + zMax) * sizeof(float));
+    pulscan_recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("Error: %s\n", cudaGetErrorString(err)); 
@@ -482,6 +514,13 @@ int main(int argc, char *argv[]) {
     long inputDataNumComplexFloats = inputDataNumFloats / 2;
 
     pulscan_boxcarAccelerationSearchExactRBin(complexData, max_boxcar_width, inputDataNumComplexFloats, zStepSize, numCandidates);
+
+    //get last cuda error
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("Error: %s\n", cudaGetErrorString(err)); 
+    }
+
 
     return 0;
 }
