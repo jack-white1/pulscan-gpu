@@ -174,6 +174,8 @@ __global__ void pulscan_complexSquaredMagnitude(float2 *complexArray, float* rea
 }
 
 __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, int zStepSize, int zMax){
+    //clock_t startTime, stopTime;
+    //startTime = clock64();
     // called with (6*numThreadsPerBlock + zMax)*sizeof(float) bytes of shared memory
     extern __shared__ float sharedMemory[];
     
@@ -189,24 +191,13 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
     // lookup array should have block size + zMax elements
     float *lookupArray = &sharedMemory[5*blockDim.x];
 
-    /*int idx = blockIdx.x * blockDim.x + threadIdx.x;;
-
-    long readIndex = threadIdx.x;
-
-    // populate the lookup array
-
-    if (threadIdx.x == 0){
-        for (int i = 0; i < zMax + blockDim.x; i++){
-            if (blockIdx.x * blockDim.x + i < n) {
-                lookupArray[i] = deviceArray[blockIdx.x * blockDim.x + i];
-            } else {
-                lookupArray[i] = 0;
-            }
-        }
-    }*/
-
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     long readIndex = threadIdx.x;
+
+    //stopTime = clock64();
+    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+    //    printf("\nkernel mem allocs finished at %ld clock cycles\n", stopTime - startTime);
+    //}
 
     // populate the lookup array
     for (int offset = 0; offset < zMax; offset += blockDim.x) {
@@ -220,19 +211,6 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
         }
     }
 
-__syncthreads(); 
-
-    //while (readIndex < blockDim.x + zMax){
-    //    if (blockIdx.x * blockDim.x + readIndex < n) {
-    //        lookupArray[readIndex] = deviceArray[blockIdx.x * blockDim.x + readIndex];
-    //    } else {
-    //        lookupArray[readIndex] = 0;
-    //    }
-    //    readIndex += blockDim.x;
-    //}
-
-
-
     __syncthreads();
 
     // populate the sum array
@@ -242,8 +220,12 @@ __syncthreads();
     searchArray[threadIdx.x].x = sumArray[threadIdx.x];
     searchArray[threadIdx.x].y = *reinterpret_cast<float*>(&idx);
 
-
     int outputIndex = 0;
+
+    //stopTime = clock64();
+    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+    //    printf("\nkernel loading data finished at %ld clock cycles\n", stopTime - startTime);
+    //}
     // begin boxcar filtering
     for (int i = 0; i < zMax; i++){
         __syncthreads();
@@ -252,6 +234,7 @@ __syncthreads();
 
         if(i % zStepSize == 0){
             // going to reorder the searchArray, so need to copy the sumArray to the searchArray
+            // so we can reuse the sumArray for the next iteration
             searchArray[threadIdx.x].x = sumArray[threadIdx.x];
             searchArray[threadIdx.x].y = *reinterpret_cast<float*>(&idx);
             for (int s = blockDim.x / 2; s > 0; s >>= 1) {
@@ -271,10 +254,23 @@ __syncthreads();
     }
 
     __syncthreads();
+    //stopTime = clock64();
+    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+    //    printf("\nkernel search finished at %ld clock cycles\n", stopTime - startTime);
+    //}
 
     if (threadIdx.x < zMax/zStepSize){
         deviceMax[gridDim.x*threadIdx.x + blockIdx.x] = maxArray[threadIdx.x];
     }
+
+    __syncthreads();
+
+    stopTime = clock64();
+    if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+        printf("\nkernel took %ld clock cycles\n", stopTime - startTime);
+    }
+
+    
 }
 
 
