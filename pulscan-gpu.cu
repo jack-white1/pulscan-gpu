@@ -265,12 +265,10 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
 
     __syncthreads();
 
-    stopTime = clock64();
-    if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
-        printf("\nkernel took %ld clock cycles\n", stopTime - startTime);
-    }
-
-    
+    //stopTime = clock64();
+    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+    //    printf("\nkernel took %ld clock cycles\n", stopTime - startTime);
+    //}
 }
 
 
