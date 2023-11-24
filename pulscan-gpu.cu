@@ -151,6 +151,26 @@ float* pulscan_readAndNormalizeFFTFile(const char *filepath, long *data_size) {
     return data;
 }
 
+__global__ void pulscan_findMedianOfMedianThrees(float* deviceArray, float* medianOutput, long arrayLength, int log3ArrayLength) {
+    // kernel will be launched with ceil(ceil(arrayLength/3),blockDim.x) blocks of blockDim.x threads
+    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+    
+}
+
+
+__global__ void pulscan_splitComplexNumbers(float2 *complexArray, float *realArray, float *imagArray, long arrayLength) {
+    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (globalThreadIndex < arrayLength) {
+        // Split the complex number into its real and imaginary parts
+        float real = complexArray[globalThreadIndex].x;
+        float complex = complexArray[globalThreadIndex].y;
+
+        // Store the real and imaginary parts in the device arrays
+        realArray[globalThreadIndex] = real;
+        imagArray[globalThreadIndex] = complex;
+    }
+}
 
 // CUDA kernel to take complex number pair and calculate the squared magnitude 
 // i.e. the number multiplied by its complex conjugate (a + bi)(a - bi) = a^2 + b^2

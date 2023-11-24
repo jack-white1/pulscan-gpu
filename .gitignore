@@ -8,3 +8,4 @@ pulscan-gpu
 sample_data/*
 *.nsys-rep
 *.sqlite
+*.ncu-rep
