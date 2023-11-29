@@ -1,3 +1,4 @@
+#include <cub/cub.cuh>
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda.h>
@@ -5,67 +6,50 @@
 #include <float.h>
 #include <math.h>
 
-// function to compare floats for qsort
-int pulscan_compare_floats_median(const void *a, const void *b) {
-    float arg1 = *(const float*)a;
-    float arg2 = *(const float*)b;
+void __global__ splitComplexNumbers(float2 *complexArray, float *realArray, float *imagArray, long arrayLength){
+    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if(arg1 < arg2) return -1;
-    if(arg1 > arg2) return 1;
-    return 0;
-}
+    if (globalThreadIndex < arrayLength) {
+        // Split the complex number into its real and imaginary parts
+        float real = complexArray[globalThreadIndex].x;
+        float complex = complexArray[globalThreadIndex].y;
 
-int pulscan_compare_float2s(const void *a, const void *b) {
-    float arg1 = ((float2*)a)->x;
-    float arg2 = ((float2*)b)->x;
-
-    if(arg1 < arg2) return 1;
-    if(arg1 > arg2) return -1;
-    return 0;
-}
-
-void pulscan_normalize_block(float* block, size_t block_size) {
-    if (block_size == 0) return;
-
-    // Compute the median
-    float* sorted_block = (float*) malloc(sizeof(float) * block_size);
-    memcpy(sorted_block, block, sizeof(float) * block_size);
-    qsort(sorted_block, block_size, sizeof(float), pulscan_compare_floats_median);
-
-    float median;
-    if (block_size % 2 == 0) {
-        median = (sorted_block[block_size/2 - 1] + sorted_block[block_size/2]) / 2.0f;
-    } else {
-        median = sorted_block[block_size/2];
-    }
-
-    // Compute the MAD
-    for (size_t i = 0; i < block_size; i++) {
-        sorted_block[i] = fabs(sorted_block[i] - median);
-    }
-    qsort(sorted_block, block_size, sizeof(float), pulscan_compare_floats_median);
-
-    float mad = block_size % 2 == 0 ?
-                (sorted_block[block_size/2 - 1] + sorted_block[block_size/2]) / 2.0f :
-                sorted_block[block_size/2];
-
-    free(sorted_block);
-
-    // scale the mad by the constant scale factor k
-    float k = 1.4826f; // 1.4826 is the scale factor to convert mad to std dev for a normal distribution https://en.wikipedia.org/wiki/Median_absolute_deviation
-    mad *= k;
-
-    // Normalize the block
-    if (mad != 0) {
-        for (size_t i = 0; i < block_size; i++) {
-            block[i] = (block[i] - median) / mad;
-        }
+        // Store the real and imaginary parts in the device arrays
+        realArray[globalThreadIndex] = real;
+        imagArray[globalThreadIndex] = complex;
     }
 }
 
-float* pulscan_readAndNormalizeFFTFile(const char *filepath, long *data_size) {
-    size_t block_size = 131072; // needs to be much larger than max boxcar width
+void __global__ subtractValueFromArrayAndTakeMagnitude(float *array, float value, long arrayLength){
+    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 
+    if (globalThreadIndex < arrayLength) {
+        array[globalThreadIndex] = fabsf(array[globalThreadIndex] - value);
+    }
+}
+
+void __global__ normaliseByMedianAndMAD(float2 *complexArray, float realMedian, float imagMedian, float realMAD, float imagMad, long arrayLength){
+    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+    realMAD = 1.4826 * realMAD;
+    imagMad = 1.4826 * imagMad;
+
+    if (globalThreadIndex < arrayLength) {
+        complexArray[globalThreadIndex].x = (complexArray[globalThreadIndex].x - realMedian) / realMAD;
+        complexArray[globalThreadIndex].y = (complexArray[globalThreadIndex].y - imagMedian) / imagMad;
+    }
+}
+
+// Utility function to check CUDA calls
+inline void checkCuda(cudaError_t result, const char *file, int line) {
+    if (result != cudaSuccess) {
+        fprintf(stderr, "CUDA ERROR: %s at %s:%d\n", cudaGetErrorString(result), file, line);
+        exit(result);
+    }
+}
+#define CHECK_CUDA(call) checkCuda((call), __FILE__, __LINE__)
+
+// Function to find median of each subarray
+float2* pulscan_readAndNormalizeFFTFileGPU(const char *filepath, long *data_size) {
     printf("Reading file: %s\n", filepath);
 
     FILE *f = fopen(filepath, "rb");
@@ -80,81 +64,109 @@ float* pulscan_readAndNormalizeFFTFile(const char *filepath, long *data_size) {
     fseek(f, 0, SEEK_SET);
 
     size_t num_floats = filesize / sizeof(float);
-
-    // Allocate memory for the data
     float* data = (float*) malloc(sizeof(float) * num_floats);
-    if(data == NULL) {
+    if (data == NULL) {
         printf("Memory allocation failed\n");
         fclose(f);
         return NULL;
     }
-    
+
     size_t n = fread(data, sizeof(float), num_floats, f);
-    if (n % 2 != 0) {
-        printf("Data file does not contain an even number of floats\n");
+    if (n != num_floats) {
+        printf("Error reading file\n");
         fclose(f);
         free(data);
         return NULL;
     }
-
-    size_t size = n / 2;
-    float* magnitude = (float*) malloc(sizeof(float) * size);
-    if(magnitude == NULL) {
-        printf("Memory allocation failed\n");
-        free(data);
-        return NULL;
-    }
-
-    printf("Finished reading file, normalizing with block size %ld\n", block_size);
-
-    #pragma omp parallel for
-    // Perform block normalization
-    for (size_t block_start = 0; block_start < size; block_start += block_size) {
-        size_t block_end = block_start + block_size < size ? block_start + block_size : size;
-        size_t current_block_size = block_end - block_start;
-
-        // Separate the real and imaginary parts
-        float* real_block = (float*) malloc(sizeof(float) * current_block_size);
-        float* imag_block = (float*) malloc(sizeof(float) * current_block_size);
-
-        if (real_block == NULL || imag_block == NULL) {
-            printf("Memory allocation failed for real_block or imag_block\n");
-            free(real_block);
-            free(imag_block);
-        }
-
-        for (size_t i = 0; i < current_block_size; i++) {
-            real_block[i] = data[2 * (block_start + i)];
-            imag_block[i] = data[2 * (block_start + i) + 1];
-        }
-
-        // Normalize real and imaginary parts independently
-        pulscan_normalize_block(real_block, current_block_size);
-        pulscan_normalize_block(imag_block, current_block_size);
-
-        for (size_t i = 0; i < current_block_size; i++) {
-            data[2 * (block_start + i)] = real_block[i];
-            data[2 * (block_start + i) + 1] = imag_block[i];
-        }
-
-        free(real_block);
-        free(imag_block);
-    }
-
-    data[0] = 0.0f; // set DC component of spectrum to 0
-    data[1] = 0.0f; // set DC component of spectrum to 0
-
     fclose(f);
 
-    *data_size = (long) size;
-    printf("Data size: %ld\n", *data_size);
-    return data;
-}
+    long numComplexFloats = n / 2; 
+    float2* complexDataDevice;
+    CHECK_CUDA(cudaMalloc((void **) &complexDataDevice, numComplexFloats * sizeof(float2)));
+    CHECK_CUDA(cudaMemcpy(complexDataDevice, data, numComplexFloats * sizeof(float2), cudaMemcpyHostToDevice));
 
-__global__ void pulscan_findMedianOfMedianThrees(float* deviceArray, float* medianOutput, long arrayLength, int log3ArrayLength) {
-    // kernel will be launched with ceil(ceil(arrayLength/3),blockDim.x) blocks of blockDim.x threads
-    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+    float* realDataDevice;
+    float* imagDataDevice;
+    CHECK_CUDA(cudaMalloc((void **) &realDataDevice, numComplexFloats * sizeof(float)));
+    CHECK_CUDA(cudaMalloc((void **) &imagDataDevice, numComplexFloats * sizeof(float)));
+
+    int numThreadsPerBlock = 256;
+    long numBlocks = (numComplexFloats + numThreadsPerBlock - 1) / numThreadsPerBlock;
+    splitComplexNumbers<<<numBlocks, numThreadsPerBlock>>>(complexDataDevice, realDataDevice, imagDataDevice, numComplexFloats);
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+// Code to sort each subarray and find medians
+    void *d_temp_storage = NULL;
+    size_t temp_storage_bytes = 0;
+
+    const size_t subArraySize = 131072; // Length of each subarray
     
+    // Prepare for sorting
+    cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, realDataDevice, realDataDevice, subArraySize);
+    CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+    
+
+    size_t numSubArrays = (numComplexFloats + subArraySize - 1) / subArraySize;  // Calculate the number of subarrays, including a possibly smaller final subarray
+    for (size_t i = 0; i < numSubArrays; i++) {
+        size_t currentSubArraySize = subArraySize;
+
+        // Adjust the size for the final subarray if necessary
+        if (i == numSubArrays - 1 && numComplexFloats % subArraySize != 0) {
+            currentSubArraySize = numComplexFloats % subArraySize;
+        }
+
+        // Sort real part of subarray
+        float* subArrayStartReal = realDataDevice + i * subArraySize;
+        cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, subArrayStartReal, subArrayStartReal, currentSubArraySize);
+
+        // Sort imaginary part of subarray
+        float* subArrayStartImag = imagDataDevice + i * subArraySize;
+        cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, subArrayStartImag, subArrayStartImag, currentSubArraySize);
+
+        // Calculate median for real part
+        float medianReal;
+        size_t medianIndex = currentSubArraySize / 2;
+        CHECK_CUDA(cudaMemcpy(&medianReal, subArrayStartReal + medianIndex, sizeof(float), cudaMemcpyDeviceToHost));
+        //printf("Median of real part in subarray %zu: %f\n", i, medianReal);
+
+        // Calculate median for imaginary part
+        float medianImag;
+        CHECK_CUDA(cudaMemcpy(&medianImag, subArrayStartImag + medianIndex, sizeof(float), cudaMemcpyDeviceToHost));
+        //printf("Median of imaginary part in subarray %zu: %f\n", i, medianImag);
+
+        int subArrayThreadsPerBlock = 256;
+        int subArrayNumBlocks = (currentSubArraySize + subArrayThreadsPerBlock - 1) / subArrayThreadsPerBlock;
+        // Subtract median from each element in subarray
+        subtractValueFromArrayAndTakeMagnitude<<<subArrayNumBlocks, subArrayThreadsPerBlock>>>(subArrayStartReal, medianReal, currentSubArraySize);
+        subtractValueFromArrayAndTakeMagnitude<<<subArrayNumBlocks, subArrayThreadsPerBlock>>>(subArrayStartImag, medianImag, currentSubArraySize);
+
+        // sort the subarrays
+        cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, subArrayStartReal, subArrayStartReal, currentSubArraySize);
+        cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, subArrayStartImag, subArrayStartImag, currentSubArraySize);
+
+        // Calculate median absolute devation for real part
+        float medianAbsoluteDeviationReal;
+        CHECK_CUDA(cudaMemcpy(&medianAbsoluteDeviationReal, subArrayStartReal + medianIndex, sizeof(float), cudaMemcpyDeviceToHost));
+        //printf("Median absolute deviation of real part in subarray %zu: %f\n", i, medianAbsoluteDeviationReal);
+
+        // Calculate median absolute devation for imaginary part
+        float medianAbsoluteDeviationImag;
+        CHECK_CUDA(cudaMemcpy(&medianAbsoluteDeviationImag, subArrayStartImag + medianIndex, sizeof(float), cudaMemcpyDeviceToHost));
+        //printf("Median absolute deviation of imaginary part in subarray %zu: %f\n", i, medianAbsoluteDeviationImag);
+
+        // Normalise each element in corresponding subarray of complexDataDevice by median and MAD
+        normaliseByMedianAndMAD<<<subArrayNumBlocks, subArrayThreadsPerBlock>>>(complexDataDevice + i * subArraySize, medianReal, medianImag, medianAbsoluteDeviationReal, medianAbsoluteDeviationImag, currentSubArraySize);
+
+    }
+
+    CHECK_CUDA(cudaFree(d_temp_storage));
+
+    // Cleanup
+    free(data);
+    CHECK_CUDA(cudaFree(realDataDevice));
+    CHECK_CUDA(cudaFree(imagDataDevice));
+    *data_size = numComplexFloats;
+    return complexDataDevice;
 }
 
 
@@ -292,27 +304,11 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
 }
 
 
-int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax, long inputDataSize, int zStepSize, int numCandidates) {
+int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long inputDataSize, int zStepSize, int numCandidates) {
     int numThreadsPerBlock = 256;
     long numBlocks = (inputDataSize + (long) numThreadsPerBlock - 1) / (long) numThreadsPerBlock;
 
     // Initialise memory for device array of complex numbers as a 1D array of floats: [real, complex, real, complex, ...]
-
-    printf("Allocating deviceComplexArray memory\n");
-    float2 *deviceComplexArray;
-    cudaMalloc((void **) &deviceComplexArray, inputDataSize * sizeof(float2));
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
-    }
-
-    // Copy host array to device array
-    printf("Copying memory\n");
-    cudaMemcpy(deviceComplexArray, hostComplexArray, inputDataSize * sizeof(float2), cudaMemcpyHostToDevice);
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
-    }
 
     printf("Starting memory allocation timer\n");
     cudaEvent_t start_mem, stop_mem;
@@ -322,24 +318,21 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
     float2 *deviceMax;
     printf("Allocating deviceMax memory\n");
     cudaMalloc((void **) &deviceMax, sizeof(float2) * (zMax/zStepSize) * numBlocks);
-    err = cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
-    }
-
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
     cudaDeviceSynchronize();
+
     //cuda memset device max to zero
     printf("Zeroing deviceMax memory\n");
     cudaMemset(deviceMax, 0, sizeof(float2) * (size_t) (zMax/zStepSize) * (size_t) numBlocks);
+    cudaDeviceSynchronize();
     err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
-    cudaDeviceSynchronize();
+    
 
     cudaEventCreate(&stop_mem);
     cudaEventRecord(stop_mem, 0);
@@ -358,36 +351,27 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
     cudaEventRecord(start, 0);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
 
     float* deviceRealArray;
     cudaMalloc((void **) &deviceRealArray, inputDataSize * sizeof(float));
 
     // Call the kernel to calculate the magnitude of the complex numbers
-    printf("Starting Magnitude kernel\n");
+    printf("Starting Magnitude kernel with numBlocks = %ld and numThreadsPerBlock = %d\n", numBlocks, numThreadsPerBlock);
     pulscan_complexSquaredMagnitude<<<numBlocks, numThreadsPerBlock>>>(deviceComplexArray, deviceRealArray, inputDataSize);
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
-    }
     cudaDeviceSynchronize();
     err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
+
     printf("Starting Boxcar kernel with %ld bytes of shared memory\n", (6*numThreadsPerBlock + zMax) * sizeof(float));
     pulscan_recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
-    }
-
     cudaDeviceSynchronize();
-
     err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
 
     // End the timer for the cuda kernel
@@ -449,13 +433,16 @@ int pulscan_boxcarAccelerationSearchExactRBin(float* hostComplexArray, int zMax,
 
     fclose(fp);
 
+    printf("Closed file\n");
 
-
-    free(hostComplexArray);
     free(hostMax);
+
+    printf("Freed host memory\n");
 
     cudaFree(deviceComplexArray);
     cudaFree(deviceMax);
+
+    printf("Freed device memory\n");
 
     return 0;
 }
@@ -518,12 +505,15 @@ int main(int argc, char *argv[]) {
     }
 
     long inputDataNumFloats;
-    float* complexData = pulscan_readAndNormalizeFFTFile(argv[1], &inputDataNumFloats);
+    float2* complexData = pulscan_readAndNormalizeFFTFileGPU(argv[1], &inputDataNumFloats);
 
     if(complexData == NULL) {
         printf("Failed to compute magnitudes.\n");
         return 1;
     }
+
+    //Initialise CUDA runtime
+    cudaFree(0);
 
     long inputDataNumComplexFloats = inputDataNumFloats / 2;
 
@@ -532,7 +522,7 @@ int main(int argc, char *argv[]) {
     //get last cuda error
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Error: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
 
 
