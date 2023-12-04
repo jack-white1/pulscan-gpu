@@ -1,7 +1,5 @@
 *.dat
-*.inf
 *.fil
-*.fft
 *.csv
 *.out
 pulscan-gpu
@@ -9,15 +7,6 @@ sample_data/*
 *.nsys-rep
 *.sqlite
 *.ncu-rep
-bitonic_sort
-bitonic_sort.cu
-bubble_sort
-bubble_sort.cu
-cub_sort
-cub_sort.cu
-cuda_thrust_sort_benchmark.cu
-testMedian.cu
-thrust-bench
 .vscode/settings.json
 code_backups/*
 !candidate_sigma_profile.csv
