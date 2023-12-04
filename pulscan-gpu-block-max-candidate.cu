@@ -6,6 +6,22 @@
 #include <float.h>
 #include <math.h>
 
+#define RESET   "\033[0m"
+#define FLASHING   "\033[5m"
+#define BOLD   "\033[1m"
+
+const char* frame = 
+"      .     *    +    .      .   .                 .              *   +  \n"
+"  *     " BOLD "____        __" RESET "  +   .             .       " BOLD "__________  __  __" RESET "    .\n"
+".   +  " BOLD "/ __ \\__  __/ /_____________" RESET "*" BOLD "_____" RESET "     .  " BOLD "/ ____/ __ \\/ / / /" RESET "     \n"
+"      " BOLD "/ /_/ / / / / / ___/ ___/ __ `/ __ \\______/ / __/ /_/ / / / /" RESET "  +   .\n"
+"   . " BOLD "/ ____/ /_/ / (__  ) /__/ /_/ / / / /_____/ /_/ / ____/ /_/ /" RESET "\n"
+"    " BOLD "/_/" RESET "  . " BOLD "\\__,_/_/____/\\___/\\__,_/_/ /_/" RESET "   *  " BOLD "\\____/_/    \\____/ .  " FLASHING "*" RESET "\n"
+" .    .       .   +           .        .         +        .       .      .\n"
+"  +     .        .      +       .           .            .    +    .\n"
+"        J. White, K. Adámek, J. Roy, S. Ransom, W. Armour   2023\n\n";
+
+
 void __global__ splitComplexNumbers(float2 *complexArray, float *realArray, float *imagArray, long arrayLength){
     long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -19,6 +35,7 @@ void __global__ splitComplexNumbers(float2 *complexArray, float *realArray, floa
         imagArray[globalThreadIndex] = complex;
     }
 }
+
 
 void __global__ subtractValueFromArrayAndTakeMagnitude(float *array, float value, long arrayLength){
     long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
@@ -49,7 +66,7 @@ inline void checkCuda(cudaError_t result, const char *file, int line) {
 #define CHECK_CUDA(call) checkCuda((call), __FILE__, __LINE__)
 
 // Function to find median of each subarray
-float2* pulscan_readAndNormalizeFFTFileGPU(const char *filepath, long *data_size) {
+float2* readAndNormalizeFFTFileGPU(const char *filepath, long *data_size) {
     printf("Reading file: %s\n", filepath);
 
     FILE *f = fopen(filepath, "rb");
@@ -95,7 +112,7 @@ float2* pulscan_readAndNormalizeFFTFileGPU(const char *filepath, long *data_size
     splitComplexNumbers<<<numBlocks, numThreadsPerBlock>>>(complexDataDevice, realDataDevice, imagDataDevice, numComplexFloats);
     CHECK_CUDA(cudaDeviceSynchronize());
 
-// Code to sort each subarray and find medians
+    // Code to sort each subarray and find medians
     void *d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
 
@@ -104,7 +121,6 @@ float2* pulscan_readAndNormalizeFFTFileGPU(const char *filepath, long *data_size
     // Prepare for sorting
     cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, realDataDevice, realDataDevice, subArraySize);
     CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-    
 
     size_t numSubArrays = (numComplexFloats + subArraySize - 1) / subArraySize;  // Calculate the number of subarrays, including a possibly smaller final subarray
     for (size_t i = 0; i < numSubArrays; i++) {
@@ -170,45 +186,25 @@ float2* pulscan_readAndNormalizeFFTFileGPU(const char *filepath, long *data_size
 }
 
 
-__global__ void pulscan_splitComplexNumbers(float2 *complexArray, float *realArray, float *imagArray, long arrayLength) {
-    long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (globalThreadIndex < arrayLength) {
-        // Split the complex number into its real and imaginary parts
-        float real = complexArray[globalThreadIndex].x;
-        float complex = complexArray[globalThreadIndex].y;
-
-        // Store the real and imaginary parts in the device arrays
-        realArray[globalThreadIndex] = real;
-        imagArray[globalThreadIndex] = complex;
-    }
-}
 
 // CUDA kernel to take complex number pair and calculate the squared magnitude 
 // i.e. the number multiplied by its complex conjugate (a + bi)(a - bi) = a^2 + b^2
 
-__global__ void pulscan_complexSquaredMagnitude(float2 *complexArray, float* realArray, long arrayLength) {
+__global__ void complexSquaredMagnitude(float2 *complexArray, float* realArray, long arrayLength) {
     long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (globalThreadIndex < arrayLength) {
-
-    // Calculate the squared magnitude of the complex number pair
-    float real = complexArray[globalThreadIndex].x;
-    float complex = complexArray[globalThreadIndex].y;
-    float squaredMagnitude = real * real + complex * complex;
-
-    __syncthreads();
-
-    
+        // Calculate the squared magnitude of the complex number pair
+        float real = complexArray[globalThreadIndex].x;
+        float complex = complexArray[globalThreadIndex].y;
+        float squaredMagnitude = real * real + complex * complex;
         // Store the squared magnitude in the device array
         realArray[globalThreadIndex] = squaredMagnitude;
     }
 }
 
-__global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, int zStepSize, int zMax){
-    //clock_t startTime, stopTime;
-    //startTime = clock64();
-    // called with (6*numThreadsPerBlock + zMax)*sizeof(float) bytes of shared memory
+__global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, int zStepSize, int zMax){
     extern __shared__ float sharedMemory[];
     
     // search array should have block size elements, each float2 will be used as [float, int] rather than [float,float]
@@ -225,11 +221,6 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     long readIndex = threadIdx.x;
-
-    //stopTime = clock64();
-    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
-    //    printf("\nkernel mem allocs finished at %ld clock cycles\n", stopTime - startTime);
-    //}
 
     // populate the lookup array
     for (int offset = 0; offset < zMax; offset += blockDim.x) {
@@ -254,10 +245,6 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
 
     int outputIndex = 0;
 
-    //stopTime = clock64();
-    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
-    //    printf("\nkernel loading data finished at %ld clock cycles\n", stopTime - startTime);
-    //}
     // begin boxcar filtering
     for (int i = 0; i < zMax; i++){
         __syncthreads();
@@ -286,10 +273,6 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
     }
 
     __syncthreads();
-    //stopTime = clock64();
-    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
-    //    printf("\nkernel search finished at %ld clock cycles\n", stopTime - startTime);
-    //}
 
     if (threadIdx.x < zMax/zStepSize){
         deviceMax[gridDim.x*threadIdx.x + blockIdx.x] = maxArray[threadIdx.x];
@@ -297,14 +280,10 @@ __global__ void pulscan_recursiveBoxcar(float *deviceArray, float2 *deviceMax, l
 
     __syncthreads();
 
-    //stopTime = clock64();
-    //if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
-    //    printf("\nkernel took %ld clock cycles\n", stopTime - startTime);
-    //}
 }
 
 
-int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long inputDataSize, int zStepSize, int numCandidates) {
+int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long inputDataSize, int zStepSize, int numCandidates) {
     int numThreadsPerBlock = 256;
     long numBlocks = (inputDataSize + (long) numThreadsPerBlock - 1) / (long) numThreadsPerBlock;
 
@@ -332,7 +311,6 @@ int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zM
     if (err != cudaSuccess) {
         printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
-    
 
     cudaEventCreate(&stop_mem);
     cudaEventRecord(stop_mem, 0);
@@ -343,7 +321,6 @@ int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zM
     cudaEventElapsedTime(&elapsedTime_mem, start_mem, stop_mem);
     printf("mem took, %f, ms\n", elapsedTime_mem);
 
-    //for (int run = 0; run < 100; run++) {
     // begin the timer for the GPU section
     printf("Starting timer\n");
     cudaEvent_t start, stop;
@@ -359,7 +336,7 @@ int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zM
 
     // Call the kernel to calculate the magnitude of the complex numbers
     printf("Starting Magnitude kernel with numBlocks = %ld and numThreadsPerBlock = %d\n", numBlocks, numThreadsPerBlock);
-    pulscan_complexSquaredMagnitude<<<numBlocks, numThreadsPerBlock>>>(deviceComplexArray, deviceRealArray, inputDataSize);
+    complexSquaredMagnitude<<<numBlocks, numThreadsPerBlock>>>(deviceComplexArray, deviceRealArray, inputDataSize);
     cudaDeviceSynchronize();
     err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -367,7 +344,7 @@ int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zM
     }
 
     printf("Starting Boxcar kernel with %ld bytes of shared memory\n", (6*numThreadsPerBlock + zMax) * sizeof(float));
-    pulscan_recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
+    recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
     cudaDeviceSynchronize();
     err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -421,8 +398,6 @@ int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zM
 
     fprintf(fp, "power, rBin, zBin\n"); // Header
 
-
-
     for (long i = 0; i < zMax/zStepSize; i++) {
         for (long j = 0; j < numCandidates; j++) {
             fprintf(fp, "%f, %d, %ld\n", final_output_candidates[i * numCandidates + j].x, *reinterpret_cast<int*>(&final_output_candidates[i * numCandidates + j].y), i*zStepSize);
@@ -447,25 +422,8 @@ int pulscan_boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zM
     return 0;
 }
 
-#define RESET   "\033[0m"
-#define FLASHING   "\033[5m"
-#define BOLD   "\033[1m"
-
-const char* pulscan_frame = 
-"      .     *    +    .      .   .                 .              *   +  \n"
-"  *     " BOLD "____        __" RESET "  +   .             .       " BOLD "__________  __  __" RESET "    .\n"
-".   +  " BOLD "/ __ \\__  __/ /_____________" RESET "*" BOLD "_____" RESET "     .  " BOLD "/ ____/ __ \\/ / / /" RESET "     \n"
-"      " BOLD "/ /_/ / / / / / ___/ ___/ __ `/ __ \\______/ / __/ /_/ / / / /" RESET "  +   .\n"
-"   . " BOLD "/ ____/ /_/ / (__  ) /__/ /_/ / / / /_____/ /_/ / ____/ /_/ /" RESET "\n"
-"    " BOLD "/_/" RESET "  . " BOLD "\\__,_/_/____/\\___/\\__,_/_/ /_/" RESET "   *  " BOLD "\\____/_/    \\____/ .  " FLASHING "*" RESET "\n"
-" .    .       .   +           .        .         +        .       .      .\n"
-"  +     .        .      +       .           .            .    +    .\n"
-                                                                
-
-"        J. White, K. Adámek, J. Roy, S. Ransom, W. Armour   2023\n\n";
-
 int main(int argc, char *argv[]) {
-    printf("%s", pulscan_frame);
+    printf("%s", frame);
     if (argc < 2) {
         printf("USAGE: %s file [-zmax int] [-zstep int]\n", argv[0]);
         printf("Required arguments:\n");
@@ -505,7 +463,7 @@ int main(int argc, char *argv[]) {
     }
 
     long inputDataNumFloats;
-    float2* complexData = pulscan_readAndNormalizeFFTFileGPU(argv[1], &inputDataNumFloats);
+    float2* complexData = readAndNormalizeFFTFileGPU(argv[1], &inputDataNumFloats);
 
     if(complexData == NULL) {
         printf("Failed to compute magnitudes.\n");
@@ -517,7 +475,7 @@ int main(int argc, char *argv[]) {
 
     long inputDataNumComplexFloats = inputDataNumFloats / 2;
 
-    pulscan_boxcarAccelerationSearchExactRBin(complexData, max_boxcar_width, inputDataNumComplexFloats, zStepSize, numCandidates);
+    boxcarAccelerationSearchExactRBin(complexData, max_boxcar_width, inputDataNumComplexFloats, zStepSize, numCandidates);
 
     //get last cuda error
     cudaError_t err = cudaGetLastError();

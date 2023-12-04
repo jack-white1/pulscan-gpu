@@ -19,3 +19,4 @@ cuda_thrust_sort_benchmark.cu
 testMedian.cu
 thrust-bench
 .vscode/settings.json
+code_backups/*
