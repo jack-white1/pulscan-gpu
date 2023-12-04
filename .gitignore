@@ -4,6 +4,8 @@
 *.out
 pulscan-gpu
 sample_data/*
+!sample_data/*.fft
+!sample_data/*.inf
 *.nsys-rep
 *.sqlite
 *.ncu-rep

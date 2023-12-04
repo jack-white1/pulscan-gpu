@@ -1,0 +1,27 @@
+ Data file name without suffix          =  first_10_mins_DM43.40
+ Telescope used                         =  GMRT
+ Instrument used                        =  Unknown
+ Object being observed                  =  J1227-4853
+ J2000 Right Ascension (hh:mm:ss.ssss)  =  12:26:60.0000
+ J2000 Declination     (dd:mm:ss.ssss)  =  -48:52:60.0000
+ Data observed by                       =  unset
+ Epoch of observation (MJD)             =  60203.277370048861485
+ Barycentered?           (1 yes, 0 no)  =  1
+ Number of bins in the time series      =  60000000   
+ Width of each time series bin (sec)    =  1.024e-05
+ Any breaks in the data? (1 yes, 0 no)  =  1
+ On/Off bin pair #  1                   =  0          , 58547871   
+ On/Off bin pair #  2                   =  59999999   , 59999999   
+ Type of observation (EM band)          =  Radio
+ Beam diameter (arcsec)                 =  3600
+ Dispersion measure (cm-3 pc)           =  43.4
+ Central freq of low channel (MHz)      =  550.1953125
+ Total bandwidth (MHz)                  =  200
+ Number of channels                     =  512
+ Channel bandwidth (MHz)                =  0.390625
+ Data analyzed by                       =  jack
+ Any additional notes:
+    Project ID unset, Date: 2023-09-16T06:43:14.7649.
+    2 polns were summed.  Samples have 8 bits.
+
+
