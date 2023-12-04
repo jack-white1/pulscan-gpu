@@ -294,6 +294,8 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
     int numThreadsPerBlock = 256;
     long numBlocks = (inputDataSize + (long) numThreadsPerBlock - 1) / (long) numThreadsPerBlock;
 
+    printf("inputDataSize = %ld\n", inputDataSize);
+
     numCandidates = numBlocks;
 
     // Initialise memory for device array of complex numbers as a 1D array of floats: [real, complex, real, complex, ...]
