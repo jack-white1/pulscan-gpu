@@ -480,16 +480,36 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    //Initialise CUDA runtime
+    cudaFree(0);
+
+    // time readAndNormalizeFFTFileGPU
+    printf("Starting readAndNormalizeFFTFileGPU timer\n");
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventRecord(start, 0);
+
     long inputDataNumFloats;
     float2* complexData = readAndNormalizeFFTFileGPU(argv[1], &inputDataNumFloats);
+    cudaDeviceSynchronize();
+
+    // End the timer for the cuda kernel
+    cudaEventCreate(&stop);
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+
+    // Calculate the time taken for the kernel to run
+    float elapsedTime;
+    cudaEventElapsedTime(&elapsedTime, start, stop);
+    printf("readAndNormalizeFFTFileGPU took, %f, ms\n", elapsedTime);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    
 
     if(complexData == NULL) {
         printf("Failed to compute magnitudes.\n");
         return 1;
     }
-
-    //Initialise CUDA runtime
-    cudaFree(0);
 
     // copy max_boxcar_width power thresholds from power_thresholds.csv to constant memory
     // the text file will be in the format of a single number of power per line with no header line
