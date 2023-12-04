@@ -20,3 +20,4 @@ testMedian.cu
 thrust-bench
 .vscode/settings.json
 code_backups/*
+!candidate_sigma_profile.csv
