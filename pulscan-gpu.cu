@@ -492,7 +492,7 @@ int main(int argc, char *argv[]) {
 
     FILE *fp = fopen("power_thresholds.csv", "r");
     if (fp == NULL) {
-        printf("Failed to open power_thresholds.csv for reading.\n");
+        printf("Failed to open power_thresholds.csv for reading. You must create a power_thresholds.csv using generate_power_thresholds.py\n");
         return 1;
     }
 
