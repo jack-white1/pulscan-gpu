@@ -440,7 +440,7 @@ int main(int argc, char *argv[]) {
         printf("Required arguments:\n");
         printf("\tfile [string]\tThe input file path (.fft file output of PRESTO realfft)\n");
         printf("Optional arguments:\n");
-        printf("\t-zmax [int]\tThe max boxcar width (default = 200)\n");
+        printf("\t-zmax [int]\tThe max boxcar width (default = 200, max = 1024)\n");
         printf("\t-zstep [1 or 2]\tThe step size for the boxcar width (default = 2)\n");
         printf("\t-candidates [int]\tThe number of candidates to return per boxcar (default = 10)\n");
         return 1;
@@ -448,10 +448,15 @@ int main(int argc, char *argv[]) {
 
     // Get the max_boxcar_width from the command line arguments
     // If not provided, default to 200
+    // If provided, cap at 1024, display warning
     int max_boxcar_width = 200;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-zmax") == 0 && i+1 < argc) {
             max_boxcar_width = atoi(argv[i+1]);
+            if (max_boxcar_width > 1024) {
+                printf("WARNING: max_boxcar_width capped at 1024\n");
+                max_boxcar_width = 1024;
+            }
         }
     }
 
@@ -484,7 +489,7 @@ int main(int argc, char *argv[]) {
     //Initialise CUDA runtime
     cudaFree(0);
 
-        // copy max_boxcar_width power thresholds from power_thresholds.csv to constant memory
+    // copy max_boxcar_width power thresholds from power_thresholds.csv to constant memory
     // the text file will be in the format of a single number of power per line with no header line
     // the line number corresponds to the corresponding z value, so line 0 is z = 0, line 1 is z = 1, etc.
     // cuda constant cache size is 64KB, so we can fit up to 16384 floats in constant memory,
@@ -510,7 +515,6 @@ int main(int argc, char *argv[]) {
     // copy powerThresholdsHost to constant memory using cudaMemcpyToSymbol
     cudaMemcpyToSymbol(powerThresholds, powerThresholdsHost, max_boxcar_width * sizeof(float));
 
-
     long inputDataNumComplexFloats = inputDataNumFloats / 2;
 
     boxcarAccelerationSearchExactRBin(complexData, max_boxcar_width, inputDataNumComplexFloats, zStepSize, numCandidates);
@@ -520,7 +524,6 @@ int main(int argc, char *argv[]) {
     if (err != cudaSuccess) {
         printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
-
 
     return 0;
 }

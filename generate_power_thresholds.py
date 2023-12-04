@@ -13,7 +13,7 @@ import csv
 sigma = float(input("Enter target sigma threshold value: "))
 
 # prompt user for z-max value
-z_max = int(input("Enter z-max value: "))
+z_max = 1024
 
 # prompt user for number of independent trials
 num_independent_trials = int(input("Enter number of independent trials: "))
