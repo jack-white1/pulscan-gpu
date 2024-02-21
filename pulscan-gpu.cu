@@ -24,6 +24,28 @@ const char* frame =
 // read only cache array of power thresholds, one for each zmax
 __constant__ float powerThresholds[16384];
 
+double __device__ power_to_logp(float dof, float chi2){
+    double double_dof = (double) dof;
+    double double_chi2 = (double) chi2;
+    // Use boundary condition
+    if (dof >= chi2 * 1.05){
+        return 0.0;
+    } else {
+        double x = 1500 * double_dof / double_chi2;
+        // Updated polynomial equation
+        double f_x = (-4.460405902717228e-46 * pow(x, 16) + 9.492786384945832e-42 * pow(x, 15) - 
+               9.147045144529116e-38 * pow(x, 14) + 5.281085384219971e-34 * pow(x, 13) - 
+               2.0376166670276118e-30 * pow(x, 12) + 5.548033164083744e-27 * pow(x, 11) - 
+               1.0973877021703706e-23 * pow(x, 10) + 1.5991806841151474e-20 * pow(x, 9) - 
+               1.7231488066853853e-17 * pow(x, 8) + 1.3660070957914896e-14 * pow(x, 7) - 
+               7.861795249869729e-12 * pow(x, 6) + 3.2136336591718867e-09 * pow(x, 5) - 
+               9.046641813341226e-07 * pow(x, 4) + 0.00016945948004599545 * pow(x, 3) - 
+               0.0214942314851717 * pow(x, 2) + 2.951595476316614 * x - 
+               755.240918031251);
+        double logp = chi2 * f_x / 1500;
+        return logp;
+    }
+}
 
 void __global__ splitComplexNumbers(float2 *complexArray, float *realArray, float *imagArray, long arrayLength){
     long globalThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
@@ -207,7 +229,7 @@ __global__ void complexSquaredMagnitude(float2 *complexArray, float* realArray, 
     }
 }
 
-__global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, int zStepSize, int zMax){
+__global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, int zStepSize, int zMax, int rhi, int rlo){
     extern __shared__ float sharedMemory[];
     
     // search array should have block size elements, each float2 will be used as [float, int] rather than [float,float]
@@ -261,9 +283,10 @@ __global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, i
             searchArray[threadIdx.x].y = *reinterpret_cast<float*>(&idx);
             for (int s = blockDim.x / 2; s > 0; s >>= 1) {
                 if (threadIdx.x < s) {
-                    if(searchArray[threadIdx.x].x < searchArray[threadIdx.x + s].x) {
-                        searchArray[threadIdx.x] = searchArray[threadIdx.x + s];
-                    }
+                    //if(searchArray[threadIdx.x].x < searchArray[threadIdx.x + s].x) {
+                    //    searchArray[threadIdx.x] = searchArray[threadIdx.x + s];
+                    //}
+                    searchArray[threadIdx.x].x = fmaxf(searchArray[threadIdx.x].x, searchArray[threadIdx.x + s].x);
                 }
                 __syncthreads();
             }
@@ -277,26 +300,27 @@ __global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, i
 
     __syncthreads();
 
+    float rFloat = maxArray[threadIdx.x].y;
+    int rInt = *reinterpret_cast<int*>(&rFloat);
 
     if (threadIdx.x*zStepSize < zMax){
         float powerThreshold = powerThresholds[threadIdx.x*zStepSize];
         if (maxArray[threadIdx.x].x > powerThreshold){
-            deviceMax[gridDim.x*threadIdx.x + blockIdx.x] = maxArray[threadIdx.x];
+            if (rInt < rhi && rInt > rlo){
+                deviceMax[gridDim.x*threadIdx.x + blockIdx.x] = maxArray[threadIdx.x];
+            }
         }
     }
-
-    __syncthreads();
-
 }
 
 
-int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long inputDataSize, int zStepSize, int numCandidates) {
+int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long inputDataSize, int zStepSize, int rhi, int rlo) {
     int numThreadsPerBlock = 256;
     long numBlocks = (inputDataSize + (long) numThreadsPerBlock - 1) / (long) numThreadsPerBlock;
 
     printf("inputDataSize = %ld\n", inputDataSize);
 
-    numCandidates = numBlocks;
+    int numCandidates = numBlocks;
 
     // Initialise memory for device array of complex numbers as a 1D array of floats: [real, complex, real, complex, ...]
 
@@ -310,7 +334,7 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
     cudaMalloc((void **) &deviceMax, sizeof(float2) * (zMax/zStepSize) * numBlocks);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("ERROR: %s\n", cudaGetErrorString(err)); 
+        printf("ERROR: %s\n", cudaGetErrorString(err));
     }
     cudaDeviceSynchronize();
 
@@ -355,7 +379,7 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
     }
 
     printf("Starting Boxcar kernel with %ld bytes of shared memory\n", (6*numThreadsPerBlock + zMax) * sizeof(float));
-    recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax);
+    recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax, rhi, rlo);
     cudaDeviceSynchronize();
     err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -444,7 +468,8 @@ int main(int argc, char *argv[]) {
         printf("Optional arguments:\n");
         printf("\t-zmax [int]\tThe max boxcar width (default = 200, max = 1024)\n");
         printf("\t-zstep [1 or 2]\tThe step size for the boxcar width (default = 2)\n");
-        printf("\t-candidates [int]\tThe number of candidates to return per boxcar (default = 10)\n");
+        printf("\t-rlo [int]\tThe minimum r-bin(default = 1)\n");
+        printf("\t-rhi [int]\tThe maximum r-bin(default = -1 = array length)\n");
         return 1;
     }
 
@@ -471,12 +496,21 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Get the number of candidates to return per boxcar from the command line arguments
-    // If not provided, default to 10
-    int numCandidates = 10;
+    // Get the rlo value from the command line arguments
+    // If not provided, default to 1
+    int rlo = 1;
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "-candidates") == 0 && i+1 < argc) {
-            numCandidates = atoi(argv[i+1]);
+        if (strcmp(argv[i], "-rlo") == 0 && i+1 < argc) {
+            rlo = atoi(argv[i+1]);
+        }
+    }
+
+    // Get the rhi value from the command line arguments
+    // If not provided, default to -1
+    int rhi = -1;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-rhi") == 0 && i+1 < argc) {
+            rhi = atoi(argv[i+1]);
         }
     }
 
@@ -504,7 +538,6 @@ int main(int argc, char *argv[]) {
     printf("readAndNormalizeFFTFileGPU took, %f, ms\n", elapsedTime);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    
 
     if(complexData == NULL) {
         printf("Failed to compute magnitudes.\n");
@@ -539,7 +572,11 @@ int main(int argc, char *argv[]) {
 
     long inputDataNumComplexFloats = inputDataNumFloats / 2;
 
-    boxcarAccelerationSearchExactRBin(complexData, max_boxcar_width, inputDataNumComplexFloats, zStepSize, numCandidates);
+    if (rhi == -1) {
+        rhi = inputDataNumComplexFloats;
+    }
+
+    boxcarAccelerationSearchExactRBin(complexData, max_boxcar_width, inputDataNumComplexFloats, zStepSize, rhi, rlo);
 
     //get last cuda error
     cudaError_t err = cudaGetLastError();

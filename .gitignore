@@ -12,3 +12,4 @@ sample_data/*
 .vscode/settings.json
 code_backups/*
 !candidate_sigma_profile.csv
+sample_data/1048576.fft
