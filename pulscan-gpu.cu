@@ -283,10 +283,10 @@ __global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, i
             searchArray[threadIdx.x].y = *reinterpret_cast<float*>(&idx);
             for (int s = blockDim.x / 2; s > 0; s >>= 1) {
                 if (threadIdx.x < s) {
-                    //if(searchArray[threadIdx.x].x < searchArray[threadIdx.x + s].x) {
-                    //    searchArray[threadIdx.x] = searchArray[threadIdx.x + s];
-                    //}
-                    searchArray[threadIdx.x].x = fmaxf(searchArray[threadIdx.x].x, searchArray[threadIdx.x + s].x);
+                    if(searchArray[threadIdx.x].x < searchArray[threadIdx.x + s].x) {
+                        searchArray[threadIdx.x] = searchArray[threadIdx.x + s];
+                    }
+                    //searchArray[threadIdx.x].x = fmaxf(searchArray[threadIdx.x].x, searchArray[threadIdx.x + s].x);
                 }
                 __syncthreads();
             }
@@ -315,7 +315,7 @@ __global__ void recursiveBoxcar(float *deviceArray, float2 *deviceMax, long n, i
 
 
 int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long inputDataSize, int zStepSize, int rhi, int rlo) {
-    int numThreadsPerBlock = 256;
+    int numThreadsPerBlock = 1024;
     long numBlocks = (inputDataSize + (long) numThreadsPerBlock - 1) / (long) numThreadsPerBlock;
 
     printf("inputDataSize = %ld\n", inputDataSize);
@@ -378,6 +378,7 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
         printf("ERROR: %s\n", cudaGetErrorString(err)); 
     }
 
+
     printf("Starting Boxcar kernel with %ld bytes of shared memory\n", (6*numThreadsPerBlock + zMax) * sizeof(float));
     recursiveBoxcar<<<numBlocks, numThreadsPerBlock, (6*numThreadsPerBlock + zMax) * sizeof(float)>>>(deviceRealArray, deviceMax, inputDataSize, zStepSize, zMax, rhi, rlo);
     cudaDeviceSynchronize();
@@ -422,7 +423,6 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
         }
     }
 
-
     FILE *fp = fopen("output.csv", "w");
     if (fp == NULL) {
         printf("Failed to open output.csv for writing.\n");
@@ -430,9 +430,7 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
     }
 
     printf("Opened file\n");
-
     fprintf(fp, "power, rBin, zBin\n"); // Header
-
     for (long i = 0; i < zMax/zStepSize; i++) {
         for (long j = 0; j < numCandidates; j++) {
             if (final_output_candidates[i * numCandidates + j].x > 0.0f) {
@@ -442,13 +440,11 @@ int boxcarAccelerationSearchExactRBin(float2* deviceComplexArray, int zMax, long
     }
 
     printf("Finished writing to file\n");
-
     fclose(fp);
 
     printf("Closed file\n");
 
     free(hostMax);
-
     printf("Freed host memory\n");
 
     cudaFree(deviceComplexArray);
