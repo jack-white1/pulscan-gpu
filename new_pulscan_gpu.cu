@@ -585,6 +585,14 @@ int main(int argc, char* argv[]){
     cudaFree(imaginaryDataDevice);
     cudaFree(medianReal);
     cudaFree(madReal);
+    cudaFree(magnitudeSquaredArray);
+    cudaFree(decimatedArrayBy2);
+    cudaFree(decimatedArrayBy3);
+    cudaFree(decimatedArrayBy4);
+    cudaFree(globalCandidateArray1);
+    cudaFree(globalCandidateArray2);
+    cudaFree(globalCandidateArray3);
+    cudaFree(globalCandidateArray4);
 
     // check last cuda error
     cudaError_t error = cudaGetLastError();
