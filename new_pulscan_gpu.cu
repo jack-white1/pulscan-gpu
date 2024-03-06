@@ -254,32 +254,40 @@ __global__ void magnitudeSquared(float* realData, float* imaginaryData, float* m
 // decimatedArray2:         [0,0,0,0,0,x,0,0,0,0,0,x,x,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
 // decimatedArray3:         [0,0,0,0,0,x,0,0,0,0,0,x,x,0,0,0,0,x,x,x,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
 // decimatedArray4:         [0,0,0,0,0,x,0,0,0,0,0,x,x,0,0,0,0,x,x,x,0,0,0,x,x,x,x,0,0,0,0,0,0,0,0,0]
+//                                     |<--------->|<--------->|<--------->|
+//                                        equal spacing between harmonics
 
 __global__ void decimateHarmonics(float* magnitudeSquaredArray, float* decimatedArray2, float* decimatedArray3, float* decimatedArray4, long numMagnitudes){
     int globalThreadIndex = blockDim.x*blockIdx.x + threadIdx.x;
 
-    float a,b,c,d,e,f,g,h,i,j;
+    float fundamental;
+    float harmonic1a, harmonic1b;
+    float harmonic2a, harmonic2b, harmonic2c;
+    float harmonic3a, harmonic3b, harmonic3c, harmonic3d;
 
     if (globalThreadIndex*2+1 < numMagnitudes){
-        a = magnitudeSquaredArray[globalThreadIndex];
-        b = magnitudeSquaredArray[globalThreadIndex*2];
-        c = magnitudeSquaredArray[globalThreadIndex*2+1];
-        decimatedArray2[globalThreadIndex] = a+b+c;
+        fundamental = magnitudeSquaredArray[globalThreadIndex];
+        harmonic1a = magnitudeSquaredArray[globalThreadIndex*2];
+        harmonic1b = magnitudeSquaredArray[globalThreadIndex*2+1];
+        decimatedArray2[globalThreadIndex] = fundamental+harmonic1a+harmonic1b;
     }
 
     if (globalThreadIndex*3+2 < numMagnitudes){
-        d = magnitudeSquaredArray[globalThreadIndex*3];
-        e = magnitudeSquaredArray[globalThreadIndex*3+1];
-        f = magnitudeSquaredArray[globalThreadIndex*3+2];
-        decimatedArray3[globalThreadIndex] = a+b+c+d+e+f;
+        harmonic2a = magnitudeSquaredArray[globalThreadIndex*3];
+        harmonic2b = magnitudeSquaredArray[globalThreadIndex*3+1];
+        harmonic2c = magnitudeSquaredArray[globalThreadIndex*3+2];
+        decimatedArray3[globalThreadIndex] = fundamental+harmonic1a+harmonic1b
+                                                +harmonic2a+harmonic2b+harmonic2c;
     }
 
     if (globalThreadIndex*4+3 < numMagnitudes){
-        g = magnitudeSquaredArray[globalThreadIndex*4];
-        h = magnitudeSquaredArray[globalThreadIndex*4+1];
-        i = magnitudeSquaredArray[globalThreadIndex*4+2];
-        j = magnitudeSquaredArray[globalThreadIndex*4+3];
-        decimatedArray4[globalThreadIndex] = a+b+c+d+e+f+g+h+i+j;
+        harmonic3a = magnitudeSquaredArray[globalThreadIndex*4];
+        harmonic3b = magnitudeSquaredArray[globalThreadIndex*4+1];
+        harmonic3c = magnitudeSquaredArray[globalThreadIndex*4+2];
+        harmonic3d = magnitudeSquaredArray[globalThreadIndex*4+3];
+        decimatedArray4[globalThreadIndex] = fundamental+harmonic1a+harmonic1b
+                                                +harmonic2a+harmonic2b+harmonic2c
+                                                +harmonic3a+harmonic3b+harmonic3c+harmonic3d;
     }
 }
 
