@@ -73,7 +73,7 @@ __global__ void medianOfMediansNormalisation(float* globalArray) {
     __shared__ float madArray[4096];
     __shared__ float normalisedArray[4096];
 
-    int globalThreadIndex = blockDim.x*blockIdx.x + threadIdx.x;
+    //int globalThreadIndex = blockDim.x*blockIdx.x + threadIdx.x;
     int localThreadIndex = threadIdx.x;
     int globalArrayIndex = blockDim.x*blockIdx.x*4+threadIdx.x;
 
@@ -437,6 +437,7 @@ const char* frame =
 "        J. White, K. Adámek, J. Roy, S. Ransom, W. Armour   2023\n\n";
 
 int main(int argc, char* argv[]){
+    int debug = 0;
     printf("%s", frame);
 
     // start high resolution timer to measure gpu initialisation time using chrono
@@ -516,7 +517,9 @@ int main(int argc, char* argv[]){
 
     int numThreadsSeparate = 256;
     int numBlocksSeparate = (numMagnitudes + numThreadsSeparate - 1)/ numThreadsSeparate;
-    printf("Calling separateRealAndImaginaryComponents with %d threads per block and %d blocks\n", numThreadsSeparate, numBlocksSeparate);
+    if (debug == 1) {
+        printf("Calling separateRealAndImaginaryComponents with %d threads per block and %d blocks\n", numThreadsSeparate, numBlocksSeparate);
+    }
     separateRealAndImaginaryComponents<<<numBlocksSeparate, numThreadsSeparate>>>((float2*)rawDataDevice, realDataDevice, imaginaryDataDevice, numMagnitudes);
 
     // stop timing
@@ -540,7 +543,9 @@ int main(int argc, char* argv[]){
     //printf("numBlocksNormalise: %d\n", numBlocksNormalise);
     //printf("numMagnitudes: %d\n", numMagnitudes);
     
-    printf("Calling medianOfMediansNormalisation with %d blocks and %d threads per block\n", numBlocksNormalise, numThreadsNormalise);
+    if (debug == 1) {
+        printf("Calling medianOfMediansNormalisation with %d blocks and %d threads per block\n", numBlocksNormalise, numThreadsNormalise);
+    }
     medianOfMediansNormalisation<<<numBlocksNormalise, numThreadsNormalise>>>(realDataDevice);
     medianOfMediansNormalisation<<<numBlocksNormalise, numThreadsNormalise>>>(imaginaryDataDevice);
     cudaDeviceSynchronize();
@@ -566,7 +571,9 @@ int main(int argc, char* argv[]){
     int numThreadsMagnitude = 1024;
     int numBlocksMagnitude = (numMagnitudes + numThreadsMagnitude - 1)/ numThreadsMagnitude;
     
-    printf("Calling magnitudeSquared with %d blocks and %d threads per block\n", numBlocksMagnitude, numThreadsMagnitude);
+    if (debug == 1) {
+        printf("Calling magnitudeSquared with %d blocks and %d threads per block\n", numBlocksMagnitude, numThreadsMagnitude);
+    }
     magnitudeSquared<<<numBlocksMagnitude, numThreadsMagnitude>>>(realDataDevice, imaginaryDataDevice, magnitudeSquaredArray, numMagnitudes);
     cudaDeviceSynchronize();
     
@@ -596,7 +603,9 @@ int main(int argc, char* argv[]){
     int numBlocksDecimate = (numMagnitudes/2 + numThreadsDecimate - 1)/ numThreadsDecimate;
 
 
-    printf("Calling decimateHarmonics with %d blocks and %d threads per block\n", numBlocksDecimate, numThreadsDecimate);
+    if (debug == 1) {
+        printf("Calling decimateHarmonics with %d blocks and %d threads per block\n", numBlocksDecimate, numThreadsDecimate);
+    }
     decimateHarmonics<<<numBlocksDecimate, numThreadsDecimate>>>(magnitudeSquaredArray, decimatedArrayBy2, decimatedArrayBy3, decimatedArrayBy4, numMagnitudes);
     cudaDeviceSynchronize();
     
@@ -629,10 +638,12 @@ int main(int argc, char* argv[]){
     cudaMalloc((void**)&globalCandidateArray4, sizeof(candidate)*16*numBlocksBoxcar4);
 
     
-    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar1, numThreadsBoxcar);
-    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar2, numThreadsBoxcar);
-    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar3, numThreadsBoxcar);
-    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar4, numThreadsBoxcar);
+    if (debug == 1) {
+        printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar1, numThreadsBoxcar);
+        printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar2, numThreadsBoxcar);
+        printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar3, numThreadsBoxcar);
+        printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar4, numThreadsBoxcar);
+    }
     boxcarFilterArray<<<numBlocksBoxcar1, numThreadsBoxcar>>>(magnitudeSquaredArray, globalCandidateArray1, 1, numMagnitudes);
     boxcarFilterArray<<<numBlocksBoxcar2, numThreadsBoxcar>>>(decimatedArrayBy2, globalCandidateArray2, 2, numMagnitudes/2);
     boxcarFilterArray<<<numBlocksBoxcar3, numThreadsBoxcar>>>(decimatedArrayBy3, globalCandidateArray3, 3, numMagnitudes/3);
@@ -657,10 +668,12 @@ int main(int argc, char* argv[]){
     int numBlocksLogp3 = (numBlocksBoxcar3*16 + numThreadsLogp - 1)/ numThreadsLogp;
     int numBlocksLogp4 = (numBlocksBoxcar4*16 + numThreadsLogp - 1)/ numThreadsLogp;
 
-    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp1, numThreadsLogp);
-    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp2, numThreadsLogp);
-    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp3, numThreadsLogp);
-    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp4, numThreadsLogp);
+    if (debug == 1) {
+        printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp1, numThreadsLogp);
+        printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp2, numThreadsLogp);
+        printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp3, numThreadsLogp);
+        printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp4, numThreadsLogp);
+    }
     calculateLogp<<<numBlocksLogp1, numThreadsLogp>>>(globalCandidateArray1, numBlocksBoxcar1*16, 1);
     calculateLogp<<<numBlocksLogp2, numThreadsLogp>>>(globalCandidateArray2, numBlocksBoxcar2*16, 3);
     calculateLogp<<<numBlocksLogp3, numThreadsLogp>>>(globalCandidateArray3, numBlocksBoxcar3*16, 6);
