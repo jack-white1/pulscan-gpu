@@ -28,8 +28,9 @@
 struct candidate{
     float power;
     float logp;
-    int blockIndex;
+    int r;
     int z;
+    int numharm;
 };
 
 double __device__ power_to_logp(float chi2, float dof){
@@ -64,7 +65,7 @@ __global__ void separateRealAndImaginaryComponents(float2* rawDataDevice, float*
     }
 }
 
-__global__ void medianOfMediansNormalisation(float* globalArray, float* median, float* mad) {
+__global__ void medianOfMediansNormalisation(float* globalArray) {
     // Each thread loads 4 elements from global memory to shared memory
     // Assumes blockDim.x = 1024
     // TODO: make this work for any blockDim.x
@@ -74,11 +75,15 @@ __global__ void medianOfMediansNormalisation(float* globalArray, float* median, 
 
     int globalThreadIndex = blockDim.x*blockIdx.x + threadIdx.x;
     int localThreadIndex = threadIdx.x;
+    int globalArrayIndex = blockDim.x*blockIdx.x*4+threadIdx.x;
 
-    medianArray[localThreadIndex] = globalArray[globalThreadIndex];
-    medianArray[localThreadIndex + 1024] = globalArray[globalThreadIndex + 1024];
-    medianArray[localThreadIndex + 2048] = globalArray[globalThreadIndex + 2048];
-    medianArray[localThreadIndex + 3072] = globalArray[globalThreadIndex + 3072];
+    float median;
+    float mad;
+
+    medianArray[localThreadIndex] = globalArray[globalArrayIndex];
+    medianArray[localThreadIndex + 1024] = globalArray[globalArrayIndex + 1024];
+    medianArray[localThreadIndex + 2048] = globalArray[globalArrayIndex + 2048];
+    medianArray[localThreadIndex + 3072] = globalArray[globalArrayIndex + 3072];
 
     madArray[localThreadIndex] = medianArray[localThreadIndex];
     madArray[localThreadIndex + 1024] = medianArray[localThreadIndex + 1024];
@@ -103,6 +108,16 @@ __global__ void medianOfMediansNormalisation(float* globalArray, float* median, 
     medianArray[localThreadIndex] = (a+b+c+d-min-max)*0.5;
     __syncthreads();
 
+    if(localThreadIndex < 512){
+        a = medianArray[localThreadIndex];
+        b = medianArray[localThreadIndex+512];
+        c = medianArray[localThreadIndex+1024];
+        d = medianArray[localThreadIndex+1536];
+        min = fminf(fminf(fminf(a,b),c),d);
+        max = fmaxf(fmaxf(fmaxf(a,b),c),d);
+        medianArray[localThreadIndex] = (a+b+c+d-min-max)*0.5;
+    }
+    __syncthreads();
     if(localThreadIndex < 256){
         a = medianArray[localThreadIndex];
         b = medianArray[localThreadIndex+256];
@@ -151,16 +166,25 @@ __global__ void medianOfMediansNormalisation(float* globalArray, float* median, 
         min = fminf(fminf(fminf(a,b),c),d);
         max = fmaxf(fmaxf(fmaxf(a,b),c),d);
         medianArray[localThreadIndex] = (a+b+c+d-min-max)*0.5;
-        *median = medianArray[0];
     }
 
     __syncthreads();
 
-    madArray[localThreadIndex] = fabsf(madArray[localThreadIndex] - *median);
-    madArray[localThreadIndex + 1024] = fabsf(madArray[localThreadIndex + 1024] - *median);
-    madArray[localThreadIndex + 2048] = fabsf(madArray[localThreadIndex + 2048] - *median);
-    madArray[localThreadIndex + 3072] = fabsf(madArray[localThreadIndex + 3072] - *median);
+    median = medianArray[0];
+    __syncthreads();
 
+    //if (localThreadIndex == 0){
+    //    printf("madArray[0]: %f, medianArray[0]: %f\n", madArray[0], medianArray[0]);
+    //}
+
+    madArray[localThreadIndex] = fabsf(madArray[localThreadIndex] - median);
+    madArray[localThreadIndex + 1024] = fabsf(madArray[localThreadIndex + 1024] - median);
+    madArray[localThreadIndex + 2048] = fabsf(madArray[localThreadIndex + 2048] - median);
+    madArray[localThreadIndex + 3072] = fabsf(madArray[localThreadIndex + 3072] - median);
+
+    //if (localThreadIndex == 0){
+    //    printf("fabsf(madArray[0]): %f, medianArray[0]: %f\n", madArray[0], medianArray[0]);
+    //}
     __syncthreads();
 
     a = madArray[localThreadIndex];
@@ -172,6 +196,16 @@ __global__ void medianOfMediansNormalisation(float* globalArray, float* median, 
     madArray[localThreadIndex] = (a+b+c+d-min-max)*0.5;
     __syncthreads();
 
+    if(localThreadIndex < 512){
+        a = madArray[localThreadIndex];
+        b = madArray[localThreadIndex+512];
+        c = madArray[localThreadIndex+1024];
+        d = madArray[localThreadIndex+1536];
+        min = fminf(fminf(fminf(a,b),c),d);
+        max = fmaxf(fmaxf(fmaxf(a,b),c),d);
+        madArray[localThreadIndex] = (a+b+c+d-min-max)*0.5;
+    }
+    __syncthreads();
     if(localThreadIndex < 256){
         a = madArray[localThreadIndex];
         b = madArray[localThreadIndex+256];
@@ -219,23 +253,34 @@ __global__ void medianOfMediansNormalisation(float* globalArray, float* median, 
         d = madArray[localThreadIndex+3];
         min = fminf(fminf(fminf(a,b),c),d);
         max = fmaxf(fmaxf(fmaxf(a,b),c),d);
-        madArray[localThreadIndex] = (a+b+c+d-min-max)*0.5;
-        *mad = 1/(madArray[0]*1.4826);
+        madArray[localThreadIndex] = (a+b+c+d-min-max)*0.5*1.4826;
+        //printf("a=%f,b=%f,c=%f,d=%f,min=%f,max=%f,1/mad=%f,mad=%.16f\n",a,b,c,d,min,max,madArray[localThreadIndex],1/madArray[localThreadIndex]);
+        
     }
     __syncthreads();
+    mad =  madArray[0];
+    __syncthreads();
 
-    normalisedArray[localThreadIndex] = (normalisedArray[localThreadIndex] - *median) * *mad;
-    normalisedArray[localThreadIndex + 1024] = (normalisedArray[localThreadIndex + 1024] - *median) * *mad;
-    normalisedArray[localThreadIndex + 2048] = (normalisedArray[localThreadIndex + 2048] - *median) * *mad;
-    normalisedArray[localThreadIndex + 3072] = (normalisedArray[localThreadIndex + 3072] - *median) * *mad;
+
+    normalisedArray[localThreadIndex] = (normalisedArray[localThreadIndex] - median) / mad;
+    normalisedArray[localThreadIndex + 1024] = (normalisedArray[localThreadIndex + 1024] - median) / mad;
+    normalisedArray[localThreadIndex + 2048] = (normalisedArray[localThreadIndex + 2048] - median) / mad;
+    normalisedArray[localThreadIndex + 3072] = (normalisedArray[localThreadIndex + 3072] - median) / mad;
 
     __syncthreads();
 
-    globalArray[globalThreadIndex] = normalisedArray[localThreadIndex];
-    globalArray[globalThreadIndex + 1024] = normalisedArray[localThreadIndex + 1024];
-    globalArray[globalThreadIndex + 2048] = normalisedArray[localThreadIndex + 2048];
-    globalArray[globalThreadIndex + 3072] = normalisedArray[localThreadIndex + 3072];
+    globalArray[globalArrayIndex] = normalisedArray[localThreadIndex];
+    globalArray[globalArrayIndex + 1024] = normalisedArray[localThreadIndex + 1024];
+    globalArray[globalArrayIndex + 2048] = normalisedArray[localThreadIndex + 2048];
+    globalArray[globalArrayIndex + 3072] = normalisedArray[localThreadIndex + 3072];
 
+    //if (localThreadIndex == 0){
+    //    printf("%f,%f,%f,%f\n",globalArray[globalThreadIndex],globalArray[globalThreadIndex + 1024],globalArray[globalThreadIndex + 2048],globalArray[globalThreadIndex + 3072]);
+    //}
+
+    //if (localThreadIndex == 0){
+    //    printf("Median: %f, MAD: %f\n", median, mad);
+    //}
 }
 
 __global__ void magnitudeSquared(float* realData, float* imaginaryData, float* magnitudeSquaredArray, long numFloats){
@@ -289,10 +334,14 @@ __global__ void decimateHarmonics(float* magnitudeSquaredArray, float* decimated
                                                 +harmonic2a+harmonic2b+harmonic2c
                                                 +harmonic3a+harmonic3b+harmonic3c+harmonic3d;
     }
+
+    //if (globalThreadIndex == 50000){
+    //    printf("fundamental: %f, harmonic1a: %f, harmonic1b: %f, harmonic2a: %f, harmonic2b: %f, harmonic2c: %f, harmonic3a: %f, harmonic3b: %f, harmonic3c: %f, harmonic3d: %f\n", fundamental, harmonic1a, harmonic1b, harmonic2a, harmonic2b, harmonic2c, harmonic3a, harmonic3b, harmonic3c, harmonic3d);
+    //}
 }
 
 // logarithmic zstep, zmax = 256, numThreads = 256
-__global__ void boxcarFilterArray(float* magnitudeSquaredArray, candidate* globalCandidateArray, long numFloats){
+__global__ void boxcarFilterArray(float* magnitudeSquaredArray, candidate* globalCandidateArray, int numharm, long numFloats){
     __shared__ float lookupArray[512];
     __shared__ float sumArray[256];
     __shared__ float searchArray[256];
@@ -324,9 +373,10 @@ __global__ void boxcarFilterArray(float* magnitudeSquaredArray, candidate* globa
                 __syncthreads();
             }
             localCandidateArray[outputCounter].power = searchArray[0];
-            localCandidateArray[outputCounter].blockIndex = blockIdx.x;
+            localCandidateArray[outputCounter].r = blockIdx.x*blockDim.x;
             localCandidateArray[outputCounter].z = z;
             localCandidateArray[outputCounter].logp = 0.0f;
+            localCandidateArray[outputCounter].numharm = numharm;
             outputCounter+=1;
             targetZ *= 2;
         }
@@ -340,13 +390,35 @@ __global__ void boxcarFilterArray(float* magnitudeSquaredArray, candidate* globa
     }
 }
 
-__global__ void calculateLogp(candidate* globalCandidateArray, long numCandidates){
+__global__ void calculateLogp(candidate* globalCandidateArray, long numCandidates, int numSum){
     int globalThreadIndex = blockDim.x*blockIdx.x + threadIdx.x;
     if (globalThreadIndex < numCandidates){
-        double logp = power_to_logp(globalCandidateArray[globalThreadIndex].power,globalCandidateArray[globalThreadIndex].z);
+        double logp = power_to_logp(globalCandidateArray[globalThreadIndex].power,globalCandidateArray[globalThreadIndex].z*numSum);
         globalCandidateArray[globalThreadIndex].logp = (float) logp;
     }
+}
 
+void copyDeviceArrayToHostAndPrint(float* deviceArray, long numFloats){
+    float* hostArray;
+    hostArray = (float*)malloc(sizeof(float)*numFloats);
+    cudaMemcpy(hostArray, deviceArray, sizeof(float)*numFloats,cudaMemcpyDeviceToHost);
+    for (int i = 0; i < numFloats; i++){
+        printf("%f\n", hostArray[i]);
+    }
+    free(hostArray);
+}
+
+void copyDeviceArrayToHostAndSaveToFile(float* deviceArray, long numFloats, const char* filename){
+    float* hostArray;
+    hostArray = (float*)malloc(sizeof(float)*numFloats);
+    cudaMemcpy(hostArray, deviceArray, sizeof(float)*numFloats,cudaMemcpyDeviceToHost);
+    FILE *f = fopen(filename, "wb");
+    // write in csv format, one number per column
+    for (int i = 0; i < numFloats; i++){
+        fprintf(f, "%f\n", hostArray[i]);
+    }
+    fclose(f);
+    free(hostArray);
 }
 
 #define RESET   "\033[0m"
@@ -444,6 +516,7 @@ int main(int argc, char* argv[]){
 
     int numThreadsSeparate = 256;
     int numBlocksSeparate = (numMagnitudes + numThreadsSeparate - 1)/ numThreadsSeparate;
+    printf("Calling separateRealAndImaginaryComponents with %d threads per block and %d blocks\n", numThreadsSeparate, numBlocksSeparate);
     separateRealAndImaginaryComponents<<<numBlocksSeparate, numThreadsSeparate>>>((float2*)rawDataDevice, realDataDevice, imaginaryDataDevice, numMagnitudes);
 
     // stop timing
@@ -453,25 +526,26 @@ int main(int argc, char* argv[]){
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Separating complex components took:     %f ms\n", milliseconds);
 
+
     // start timing
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
     // Normalise the real and imaginary parts
-    float* medianReal;
-    float* madReal;
-    cudaMalloc((void**)&medianReal, sizeof(float));
-    cudaMalloc((void**)&madReal, sizeof(float));
 
     int numMagnitudesPerThreadNormalise = 4;
     int numThreadsNormalise = 1024; // DO NOT CHANGE THIS, TODO: make it changeable
-    int numBlocksNormalise = ((numMagnitudes/(numMagnitudesPerThreadNormalise * numThreadsNormalise)) + numThreadsNormalise - 1)/ numThreadsNormalise;
-
-    medianOfMediansNormalisation<<<numBlocksNormalise, numThreadsNormalise>>>(realDataDevice, medianReal, madReal);
-    medianOfMediansNormalisation<<<numBlocksNormalise, numThreadsNormalise>>>(imaginaryDataDevice, medianReal, madReal);
+    int numBlocksNormalise = ((numMagnitudes/numMagnitudesPerThreadNormalise) + numThreadsNormalise - 1)/ numThreadsNormalise;
+    //printf("numBlocksNormalise: %d\n", numBlocksNormalise);
+    //printf("numMagnitudes: %d\n", numMagnitudes);
+    
+    printf("Calling medianOfMediansNormalisation with %d blocks and %d threads per block\n", numBlocksNormalise, numThreadsNormalise);
+    medianOfMediansNormalisation<<<numBlocksNormalise, numThreadsNormalise>>>(realDataDevice);
+    medianOfMediansNormalisation<<<numBlocksNormalise, numThreadsNormalise>>>(imaginaryDataDevice);
     cudaDeviceSynchronize();
 
+    //copyDeviceArrayToHostAndPrint(realDataDevice, numMagnitudes);
     
     // stop timing
     cudaEventRecord(stop);
@@ -491,10 +565,14 @@ int main(int argc, char* argv[]){
 
     int numThreadsMagnitude = 1024;
     int numBlocksMagnitude = (numMagnitudes + numThreadsMagnitude - 1)/ numThreadsMagnitude;
-
+    
+    printf("Calling magnitudeSquared with %d blocks and %d threads per block\n", numBlocksMagnitude, numThreadsMagnitude);
     magnitudeSquared<<<numBlocksMagnitude, numThreadsMagnitude>>>(realDataDevice, imaginaryDataDevice, magnitudeSquaredArray, numMagnitudes);
     cudaDeviceSynchronize();
     
+    //copyDeviceArrayToHostAndPrint(magnitudeSquaredArray, numMagnitudes);
+    //copyDeviceArrayToHostAndSaveToFile(magnitudeSquaredArray, numMagnitudes, "magnitudeSquaredArray.bin");
+
     // stop timing
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -517,7 +595,9 @@ int main(int argc, char* argv[]){
     int numThreadsDecimate = 256;
     int numBlocksDecimate = (numMagnitudes/2 + numThreadsDecimate - 1)/ numThreadsDecimate;
 
-    decimateHarmonics<<<numBlocksDecimate, numThreadsDecimate>>>(realDataDevice, decimatedArrayBy2, decimatedArrayBy3, decimatedArrayBy4, numMagnitudes);
+
+    printf("Calling decimateHarmonics with %d blocks and %d threads per block\n", numBlocksDecimate, numThreadsDecimate);
+    decimateHarmonics<<<numBlocksDecimate, numThreadsDecimate>>>(magnitudeSquaredArray, decimatedArrayBy2, decimatedArrayBy3, decimatedArrayBy4, numMagnitudes);
     cudaDeviceSynchronize();
     
     // stop timing
@@ -547,14 +627,18 @@ int main(int argc, char* argv[]){
     cudaMalloc((void**)&globalCandidateArray2, sizeof(candidate)*16*numBlocksBoxcar2);
     cudaMalloc((void**)&globalCandidateArray3, sizeof(candidate)*16*numBlocksBoxcar3);
     cudaMalloc((void**)&globalCandidateArray4, sizeof(candidate)*16*numBlocksBoxcar4);
-    
-    boxcarFilterArray<<<numBlocksBoxcar1, numThreadsBoxcar>>>(magnitudeSquaredArray, globalCandidateArray1, numMagnitudes);
-    boxcarFilterArray<<<numBlocksBoxcar2, numThreadsBoxcar>>>(decimatedArrayBy2, globalCandidateArray2, numMagnitudes/2);
-    boxcarFilterArray<<<numBlocksBoxcar3, numThreadsBoxcar>>>(decimatedArrayBy3, globalCandidateArray3, numMagnitudes/3);
-    boxcarFilterArray<<<numBlocksBoxcar4, numThreadsBoxcar>>>(decimatedArrayBy4, globalCandidateArray4, numMagnitudes/4);
-    cudaDeviceSynchronize();
 
     
+    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar1, numThreadsBoxcar);
+    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar2, numThreadsBoxcar);
+    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar3, numThreadsBoxcar);
+    printf("Calling boxcarFilterArray with %d blocks and %d threads per block\n", numBlocksBoxcar4, numThreadsBoxcar);
+    boxcarFilterArray<<<numBlocksBoxcar1, numThreadsBoxcar>>>(magnitudeSquaredArray, globalCandidateArray1, 1, numMagnitudes);
+    boxcarFilterArray<<<numBlocksBoxcar2, numThreadsBoxcar>>>(decimatedArrayBy2, globalCandidateArray2, 2, numMagnitudes/2);
+    boxcarFilterArray<<<numBlocksBoxcar3, numThreadsBoxcar>>>(decimatedArrayBy3, globalCandidateArray3, 3, numMagnitudes/3);
+    boxcarFilterArray<<<numBlocksBoxcar4, numThreadsBoxcar>>>(decimatedArrayBy4, globalCandidateArray4, 4, numMagnitudes/4);
+    cudaDeviceSynchronize();
+
     // stop timing
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -573,10 +657,14 @@ int main(int argc, char* argv[]){
     int numBlocksLogp3 = (numBlocksBoxcar3*16 + numThreadsLogp - 1)/ numThreadsLogp;
     int numBlocksLogp4 = (numBlocksBoxcar4*16 + numThreadsLogp - 1)/ numThreadsLogp;
 
-    calculateLogp<<<numBlocksLogp1, numThreadsLogp>>>(globalCandidateArray1, numBlocksBoxcar1*16);
-    calculateLogp<<<numBlocksLogp2, numThreadsLogp>>>(globalCandidateArray2, numBlocksBoxcar2*16);
-    calculateLogp<<<numBlocksLogp3, numThreadsLogp>>>(globalCandidateArray3, numBlocksBoxcar3*16);
-    calculateLogp<<<numBlocksLogp4, numThreadsLogp>>>(globalCandidateArray4, numBlocksBoxcar4*16);
+    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp1, numThreadsLogp);
+    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp2, numThreadsLogp);
+    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp3, numThreadsLogp);
+    printf("Calling calculateLogp with %d blocks and %d threads per block\n", numBlocksLogp4, numThreadsLogp);
+    calculateLogp<<<numBlocksLogp1, numThreadsLogp>>>(globalCandidateArray1, numBlocksBoxcar1*16, 1);
+    calculateLogp<<<numBlocksLogp2, numThreadsLogp>>>(globalCandidateArray2, numBlocksBoxcar2*16, 3);
+    calculateLogp<<<numBlocksLogp3, numThreadsLogp>>>(globalCandidateArray3, numBlocksBoxcar3*16, 6);
+    calculateLogp<<<numBlocksLogp4, numThreadsLogp>>>(globalCandidateArray4, numBlocksBoxcar4*16, 10);
     cudaDeviceSynchronize();
 
     // stop timing
@@ -586,13 +674,72 @@ int main(int argc, char* argv[]){
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Logp time taken:                        %f ms\n", milliseconds);
 
+    // start chrono timer for writing output file
+    start_chrono = std::chrono::high_resolution_clock::now();
+
+    candidate* hostCandidateArray1;
+    candidate* hostCandidateArray2;
+    candidate* hostCandidateArray3;
+    candidate* hostCandidateArray4;
+
+    hostCandidateArray1 = (candidate*)malloc(sizeof(candidate)*16*numBlocksBoxcar1);
+    hostCandidateArray2 = (candidate*)malloc(sizeof(candidate)*16*numBlocksBoxcar2);
+    hostCandidateArray3 = (candidate*)malloc(sizeof(candidate)*16*numBlocksBoxcar3);
+    hostCandidateArray4 = (candidate*)malloc(sizeof(candidate)*16*numBlocksBoxcar4);
+
+    cudaMemcpy(hostCandidateArray1, globalCandidateArray1, sizeof(candidate)*16*numBlocksBoxcar1, cudaMemcpyDeviceToHost);
+    cudaMemcpy(hostCandidateArray2, globalCandidateArray2, sizeof(candidate)*16*numBlocksBoxcar2, cudaMemcpyDeviceToHost);
+    cudaMemcpy(hostCandidateArray3, globalCandidateArray3, sizeof(candidate)*16*numBlocksBoxcar3, cudaMemcpyDeviceToHost);
+    cudaMemcpy(hostCandidateArray4, globalCandidateArray4, sizeof(candidate)*16*numBlocksBoxcar4, cudaMemcpyDeviceToHost);
+
+    // write the candidates to a csv file with a header line
+    FILE *csvFile = fopen("candidates.csv", "w");
+    fprintf(csvFile, "r,z,power,logp,numharm\n");
+
+    for (int i = 0; i < numBlocksBoxcar1*16; i++){
+        if (i % 16 < 9){
+            if (hostCandidateArray1[i].logp < -50){
+                fprintf(csvFile, "%d,%d,%f,%f,%d\n", hostCandidateArray1[i].r, hostCandidateArray1[i].z, hostCandidateArray1[i].power, hostCandidateArray1[i].logp, hostCandidateArray1[i].numharm);
+            }
+        }
+    }
+
+    for (int i = 0; i < numBlocksBoxcar2*16; i++){
+        if (i % 16 < 9){
+            if (hostCandidateArray2[i].logp < -50){
+                fprintf(csvFile, "%d,%d,%f,%f,%d\n", hostCandidateArray2[i].r, hostCandidateArray2[i].z, hostCandidateArray2[i].power, hostCandidateArray2[i].logp, hostCandidateArray2[i].numharm);
+            }
+        }
+    }
+
+    for (int i = 0; i < numBlocksBoxcar3*16; i++){
+        if (i % 16 < 9){
+            if (hostCandidateArray3[i].logp < -50){
+                fprintf(csvFile, "%d,%d,%f,%f,%d\n", hostCandidateArray3[i].r, hostCandidateArray3[i].z, hostCandidateArray3[i].power, hostCandidateArray3[i].logp, hostCandidateArray3[i].numharm);
+            }
+        }
+    }
+
+    for (int i = 0; i < numBlocksBoxcar4*16; i++){
+        if (i % 16 < 9){
+            if (hostCandidateArray4[i].logp < -50){
+                fprintf(csvFile, "%d,%d,%f,%f,%d\n", hostCandidateArray4[i].r, hostCandidateArray4[i].z, hostCandidateArray4[i].power, hostCandidateArray4[i].logp, hostCandidateArray4[i].numharm);
+            }
+        }
+    }
+
+    fclose(csvFile);
+
+    // stop chrono timer for writing output file
+    end_chrono = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_chrono - start_chrono);
+    printf("Writing output file took:               %f ms\n", (float)duration.count());
+
 
     free(rawData);
     cudaFree(rawDataDevice);
     cudaFree(realDataDevice);
     cudaFree(imaginaryDataDevice);
-    cudaFree(medianReal);
-    cudaFree(madReal);
     cudaFree(magnitudeSquaredArray);
     cudaFree(decimatedArrayBy2);
     cudaFree(decimatedArrayBy3);
@@ -609,5 +756,4 @@ int main(int argc, char* argv[]){
     }
 
     return 0;
-
 }
