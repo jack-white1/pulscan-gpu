@@ -2,7 +2,7 @@
 *.fil
 *.csv
 *.out
-pulscan-gpu
+pulscan_gpu
 sample_data/*
 !sample_data/*.fft
 !sample_data/*.inf
@@ -11,7 +11,9 @@ sample_data/*
 *.ncu-rep
 .vscode/settings.json
 code_backups/*
-!candidate_sigma_profile.csv
+candidate_sigma_profile.csv
 sample_data/1048576.fft
 new_pulscan_gpu
 magnitudeSquaredArray.bin
+*.o
+pulscan_GH200
